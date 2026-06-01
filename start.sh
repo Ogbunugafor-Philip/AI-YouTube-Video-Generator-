@@ -2,7 +2,7 @@
 # Startup script for the AI YouTube Video Generator.
 #   1. Activate (or create) the Python virtual environment.
 #   2. Install backend dependencies.
-#   3. Start FastAPI via uvicorn on port 8001 (override with PORT env var).
+#   3. Start FastAPI via uvicorn on port 8003 (override with PORT env var).
 #   4. Build the React frontend.
 #   5. (Re)start Nginx to serve the frontend + proxy the API.
 #
@@ -14,7 +14,7 @@ BACKEND_DIR="$PROJECT_ROOT/backend"
 FRONTEND_DIR="$PROJECT_ROOT/frontend"
 VENV_DIR="$PROJECT_ROOT/venv"
 # Port 8000 is used by another app on this box; default to the next free port.
-PORT="${PORT:-8001}"
+PORT="${PORT:-8003}"
 
 echo "==> Project root: $PROJECT_ROOT"
 

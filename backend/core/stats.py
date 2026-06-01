@@ -23,7 +23,17 @@ COST_PER_VIDEO_CLIP = 0.05
 COST_PER_TTS_CALL = 0.02
 COST_PER_IMAGE_CALL = 0.01
 
-_DEFAULT: Dict[str, Any] = {"total_api_calls": 0, "estimated_total_cost": 0.0, "videos": []}
+_DEFAULT: Dict[str, Any] = {
+    "total_api_calls": 0,
+    "estimated_total_cost": 0.0,
+    "videos": [],
+    # --- Phase 2: breaking-news automation counters ---
+    "news_alerts_sent": 0,
+    "yes_replies": 0,
+    "no_replies": 0,
+    "auto_videos": 0,
+    "last_news_check": None,
+}
 
 
 def _read() -> Dict[str, Any]:
@@ -77,6 +87,47 @@ def record_video(
     log.info("Recorded produced video %s (%s)", job_id, title)
 
 
+def record_alert_sent(count: int = 1) -> None:
+    with _lock:
+        data = _read()
+        data["news_alerts_sent"] += count
+        _write(data)
+
+
+def record_reply(decision: str) -> None:
+    key = "yes_replies" if decision.upper() == "YES" else "no_replies"
+    with _lock:
+        data = _read()
+        data[key] += 1
+        _write(data)
+
+
+def record_auto_video() -> None:
+    with _lock:
+        data = _read()
+        data["auto_videos"] += 1
+        _write(data)
+
+
+def set_last_news_check(timestamp: str) -> None:
+    with _lock:
+        data = _read()
+        data["last_news_check"] = timestamp
+        _write(data)
+
+
+def get_news_stats() -> Dict[str, Any]:
+    with _lock:
+        data = _read()
+    return {
+        "news_alerts_sent": data.get("news_alerts_sent", 0),
+        "yes_replies": data.get("yes_replies", 0),
+        "no_replies": data.get("no_replies", 0),
+        "auto_videos": data.get("auto_videos", 0),
+        "last_news_check": data.get("last_news_check"),
+    }
+
+
 def get_stats() -> Dict[str, Any]:
     with _lock:
         data = _read()
@@ -86,4 +137,9 @@ def get_stats() -> Dict[str, Any]:
         "total_api_calls": data.get("total_api_calls", 0),
         "estimated_total_cost": round(data.get("estimated_total_cost", 0.0), 4),
         "videos": videos,
+        "news_alerts_sent": data.get("news_alerts_sent", 0),
+        "yes_replies": data.get("yes_replies", 0),
+        "no_replies": data.get("no_replies", 0),
+        "auto_videos": data.get("auto_videos", 0),
+        "last_news_check": data.get("last_news_check"),
     }

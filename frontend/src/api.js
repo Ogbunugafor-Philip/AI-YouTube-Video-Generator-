@@ -31,6 +31,25 @@ export const api = {
     if (!res.ok) throw new Error('Failed to load stats')
     return res.json()
   },
+  getAlerts: async () => {
+    const res = await fetch('/api/news/alerts')
+    if (!res.ok) throw new Error('Failed to load alerts')
+    return res.json()
+  },
+  sendTestAlert: () => postJSON('/api/news/test-alert', {}),
+  fetchLatestNews: async () => {
+    const res = await fetch('/api/news/latest')
+    if (!res.ok) {
+      let detail = res.statusText
+      try {
+        detail = (await res.json()).detail || detail
+      } catch (e) {
+        /* ignore */
+      }
+      throw new Error(detail)
+    }
+    return res.json()
+  },
   progressUrl: (jobId) => `/api/video/progress/${jobId}`,
   downloadUrl: (jobId) => `/api/video/download/${jobId}`,
   // thumbnail.jpg is served from OUTPUT_DIR via /media. Cache-bust on demand.

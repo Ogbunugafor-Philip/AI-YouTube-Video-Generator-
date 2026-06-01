@@ -11,7 +11,7 @@ from models.schemas import (
     ScriptGenerateRequest,
     ScriptGenerateResponse,
 )
-from services import cerebras_service
+from services import llm_service
 from routers.video import start_production
 
 log = get_logger(__name__)
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/script", tags=["script"])
 async def generate(req: ScriptGenerateRequest) -> ScriptGenerateResponse:
     """Generate (or accept) a script, split into scenes, and propose a title.
 
-    - topic mode: Cerebras writes the narration from the topic.
+    - topic mode: the LLM writes the narration from the topic.
     - writeup mode: the user's content is used VERBATIM — never altered. We only
       split it into scenes.
     """
@@ -39,7 +39,7 @@ async def generate(req: ScriptGenerateRequest) -> ScriptGenerateResponse:
         if not req.topic or not req.topic.strip():
             raise HTTPException(status_code=400, detail="topic is required for topic mode")
         try:
-            script_text = cerebras_service.generate_script(
+            script_text = llm_service.generate_script(
                 req.topic, req.duration_minutes, mode
             )
         except RuntimeError as exc:
@@ -48,8 +48,8 @@ async def generate(req: ScriptGenerateRequest) -> ScriptGenerateResponse:
         raise HTTPException(status_code=400, detail=f"Unknown mode: {mode}")
 
     try:
-        scenes = cerebras_service.split_into_scenes(script_text)
-        title = cerebras_service.generate_title(script_text)
+        scenes = llm_service.split_into_scenes(script_text)
+        title = llm_service.generate_title(script_text)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

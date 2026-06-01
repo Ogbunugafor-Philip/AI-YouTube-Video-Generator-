@@ -23,15 +23,23 @@ def _get(key: str, default: str = "") -> str:
 class Config:
     """Typed accessors for every environment variable the app needs."""
 
-    # --- Cerebras (script generation) ---
-    CEREBRAS_API_KEY: str = _get("CEREBRAS_API_KEY")
-    CEREBRAS_MODEL: str = _get("CEREBRAS_MODEL", "llama3.1-8b")
-
-    # --- fal.ai (video / image / tts) ---
+    # --- fal.ai (LLM / video / image / tts) ---
     FAL_API_KEY: str = _get("FAL_API_KEY")
     FAL_VIDEO_MODEL: str = _get("FAL_VIDEO_MODEL", "fal-ai/fast-svd-lcm")
     FAL_IMAGE_MODEL: str = _get("FAL_IMAGE_MODEL", "fal-ai/flux/schnell")
     FAL_TTS_MODEL: str = _get("FAL_TTS_MODEL", "fal-ai/playai-tts")
+    # LLM (script generation) via fal-ai/any-llm.
+    FAL_LLM_MODEL: str = _get("FAL_LLM_MODEL", "fal-ai/any-llm")
+    FAL_LLM_CHAT_MODEL: str = _get("FAL_LLM_CHAT_MODEL", "openai/gpt-oss-120b")
+
+    # --- Gmail (alerts + reply polling) ---
+    GMAIL_ADDRESS: str = _get("GMAIL_ADDRESS")
+    GMAIL_APP_PASSWORD: str = _get("GMAIL_APP_PASSWORD")
+
+    # --- YouTube Data API v3 (draft upload) ---
+    YOUTUBE_CLIENT_ID: str = _get("YOUTUBE_CLIENT_ID")
+    YOUTUBE_CLIENT_SECRET: str = _get("YOUTUBE_CLIENT_SECRET")
+    YOUTUBE_REFRESH_TOKEN: str = _get("YOUTUBE_REFRESH_TOKEN")
 
     # --- App ---
     APP_SECRET_KEY: str = _get("APP_SECRET_KEY", "change-me")
@@ -45,6 +53,10 @@ class Config:
     def stats_file(self) -> Path:
         return self.OUTPUT_DIR / "stats.json"
 
+    @property
+    def alerts_file(self) -> Path:
+        return self.OUTPUT_DIR / "alerts.json"
+
     def ensure_dirs(self) -> None:
         """Make sure output/temp directories exist."""
         self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -53,7 +65,6 @@ class Config:
     def missing_keys(self) -> list[str]:
         """Return a list of required secret keys that are empty (for diagnostics)."""
         required = {
-            "CEREBRAS_API_KEY": self.CEREBRAS_API_KEY,
             "FAL_API_KEY": self.FAL_API_KEY,
         }
         return [k for k, v in required.items() if not v]

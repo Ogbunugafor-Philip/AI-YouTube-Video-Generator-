@@ -102,3 +102,10 @@ class AdminStatsResponse(BaseModel):
     total_api_calls: int
     estimated_total_cost: float
     videos: List[VideoRecord]
+    # --- Phase 2: breaking-news automation ---
+    news_alerts_sent: int = 0
+    yes_replies: int = 0
+    no_replies: int = 0
+    auto_videos: int = 0
+    last_news_check: Optional[str] = None
+    next_news_check: Optional[str] = None
