@@ -9,6 +9,8 @@ temp/
 *.jpg
 *.png
 node_modules/
+dist/
+*.log
 .DS_Store
 venv/
 client_secret.json
