@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+outputs/
+temp/
+*.mp4
+*.mp3
+*.wav
+*.jpg
+*.png
+node_modules/
+.DS_Store
+venv/
+client_secret.json
+get_youtube_token.py
