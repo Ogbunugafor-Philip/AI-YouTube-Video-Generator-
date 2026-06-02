@@ -82,6 +82,21 @@ class VideoUploadResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Mobile / FCM
+# --------------------------------------------------------------------------- #
+class FcmRegisterRequest(BaseModel):
+    device_token: str = Field(..., description="FCM device registration token")
+    device_id: str = Field(..., description="Stable per-install device id")
+    platform: str = "android"
+
+
+class PublishRequest(BaseModel):
+    # Publish an existing produced video to YouTube (private draft -> public).
+    job_id: Optional[str] = None
+    video_id: Optional[str] = None  # YouTube video id (if already uploaded)
+
+
+# --------------------------------------------------------------------------- #
 # Thumbnail
 # --------------------------------------------------------------------------- #
 class ThumbnailRegenerateRequest(BaseModel):

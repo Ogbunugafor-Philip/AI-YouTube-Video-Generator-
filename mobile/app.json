@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "VidGen Studio",
+    "slug": "vidgen-studio",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "vidgenstudio",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.vidgen.studio",
+      "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "permissions": ["INTERNET", "POST_NOTIFICATIONS", "ACCESS_NETWORK_STATE"]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#e94560"
+        }
+      ]
+    ],
+    "extra": {
+      "apiBaseUrl": "https://vidgen.store"
+    }
+  }
+}

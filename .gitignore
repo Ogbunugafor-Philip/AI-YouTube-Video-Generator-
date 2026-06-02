@@ -15,3 +15,15 @@ dist/
 venv/
 client_secret.json
 get_youtube_token.py
+
+# Firebase service account (contains a private key) — never commit.
+firebase-service-account.json
+backend/firebase-service-account.json
+
+# Mobile (Expo/React Native) build artifacts
+mobile/node_modules/
+mobile/.expo/
+mobile/android/
+mobile/ios/
+mobile/*.apk
+mobile/dist/

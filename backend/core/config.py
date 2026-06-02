@@ -61,6 +61,11 @@ class Config:
     # upload time (publishAt). 0 = leave as a private draft for manual review.
     YOUTUBE_AUTO_SCHEDULE_HOURS: int = _get_int("YOUTUBE_AUTO_SCHEDULE_HOURS", 0)
 
+    # --- Firebase Cloud Messaging (push notifications) ---
+    FIREBASE_SERVICE_ACCOUNT_PATH: str = _get("FIREBASE_SERVICE_ACCOUNT_PATH")
+    FIREBASE_PROJECT_ID: str = _get("FIREBASE_PROJECT_ID")
+    FCM_API_KEY: str = _get("FCM_API_KEY")
+
     # --- App ---
     APP_SECRET_KEY: str = _get("APP_SECRET_KEY", "change-me")
     APP_ENV: str = _get("APP_ENV", "development")
@@ -76,6 +81,16 @@ class Config:
     @property
     def alerts_file(self) -> Path:
         return self.OUTPUT_DIR / "alerts.json"
+
+    @property
+    def devices_file(self) -> Path:
+        return self.OUTPUT_DIR / "devices.json"
+
+    @property
+    def firebase_service_account_file(self) -> Path:
+        """Absolute path to the Firebase service-account JSON (gitignored)."""
+        p = Path(self.FIREBASE_SERVICE_ACCOUNT_PATH or "")
+        return p if p.is_absolute() else (BASE_DIR / p)
 
     def ensure_dirs(self) -> None:
         """Make sure output/temp directories exist."""

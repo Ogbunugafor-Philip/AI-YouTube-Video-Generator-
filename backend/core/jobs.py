@@ -119,9 +119,9 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
         ffmpeg_service,
         youtube_service,
         gmail_service,
-        push_service,
         subtitle_service,
     )
+    import push_fcm_service
     from core import stats
     from core.config import config
 
@@ -172,8 +172,10 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
         publish_at,
     )
 
-    # 10: notify the creator (push + email).
-    await asyncio.to_thread(push_service.send_draft_ready_push, gen_title, draft_url)
+    # 10: notify the creator (FCM push to all devices + email).
+    await asyncio.to_thread(
+        push_fcm_service.broadcast_draft_ready, gen_title, draft_url
+    )
     await asyncio.to_thread(
         gmail_service.send_draft_ready_notification, gen_title, draft_url
     )
@@ -229,15 +231,23 @@ def cleanup_job_files(job_id: str) -> int:
 
 
 async def news_monitor_job() -> None:
-    """Every 3h: fetch + score news, email alerts for the top stories."""
+    """Every 3h: fetch + score news, email alerts + FCM pushes for top stories."""
     from services import news_service, gmail_service
     from core import stats
+    import push_fcm_service
 
     log.info("[news_monitor_job] starting")
     try:
         stories = await asyncio.to_thread(news_service.get_top_stories)
         records = await asyncio.to_thread(gmail_service.send_news_alert, stories)
         stats.record_alert_sent(len(records))
+        # Push a breaking-news alert (YES/NO actions) to every registered device.
+        for story in stories:
+            await asyncio.to_thread(
+                push_fcm_service.broadcast_breaking_news,
+                story.get("title", "Breaking AI News"),
+                story.get("story_id", ""),
+            )
         stats.set_last_news_check(datetime.datetime.now().isoformat(timespec="seconds"))
         log.info(
             "[news_monitor_job] %d stories found, %d alerts sent",

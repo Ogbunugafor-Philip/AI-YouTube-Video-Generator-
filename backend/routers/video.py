@@ -19,6 +19,7 @@ from core import jobs, stats
 from core.config import config
 from core.logger import get_logger
 from models.schemas import (
+    PublishRequest,
     VideoProduceRequest,
     VideoProduceResponse,
     VideoUploadRequest,
@@ -174,6 +175,28 @@ async def produce(req: VideoProduceRequest) -> VideoProduceResponse:
     )
 
 
+@router.get("/status/{job_id}")
+async def status(job_id: str) -> dict:
+    """Polling-friendly job snapshot (mobile uses this instead of SSE)."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "step": job.get("step", ""),
+        "percentage": job.get("percentage", 0),
+        "scenes_total": job.get("scenes_total", 0),
+        "scenes_completed": job.get("scenes_completed", 0),
+        "title": job.get("title", ""),
+        "video_path": job.get("video_path"),
+        "thumbnail_path": job.get("thumbnail_path"),
+        "thumbnail_url": f"/media/{job_id}/thumbnail.jpg" if job.get("thumbnail_path") else None,
+        "youtube_video_id": job.get("youtube_video_id"),
+        "error": job.get("error"),
+    }
+
+
 @router.get("/progress/{job_id}")
 async def progress(job_id: str) -> StreamingResponse:
     """Stream production progress for ``job_id`` as Server-Sent Events."""
@@ -285,3 +308,33 @@ async def upload(req: VideoUploadRequest) -> VideoUploadResponse:
     return VideoUploadResponse(
         job_id=req.job_id, youtube_video_id=video_id, draft_url=draft_url
     )
+
+
+@router.post("/publish")
+async def publish(req: PublishRequest) -> dict:
+    """One-tap publish: make a draft video public immediately.
+
+    Accepts a job_id (resolves its youtube_video_id) or a direct video_id.
+    """
+    video_id = req.video_id
+    if not video_id and req.job_id:
+        job = jobs.get_job(req.job_id)
+        if job:
+            video_id = job.get("youtube_video_id")
+        if not video_id:
+            # Fall back to the stored history record.
+            for v in stats.get_videos():
+                if v.get("job_id") == req.job_id and v.get("youtube_video_id"):
+                    video_id = v["youtube_video_id"]
+                    break
+    if not video_id:
+        raise HTTPException(status_code=409, detail="No uploaded video to publish")
+
+    from services import youtube_service
+
+    try:
+        youtube_url = await asyncio.to_thread(youtube_service.publish_video, video_id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Publish failed for %s", video_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"status": "published", "video_id": video_id, "youtube_url": youtube_url}

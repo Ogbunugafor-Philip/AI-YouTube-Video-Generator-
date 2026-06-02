@@ -177,6 +177,33 @@ def upload_to_youtube(
         raise RuntimeError(f"YouTube upload failed: {exc}") from exc
 
 
+def publish_video(video_id: str) -> str:
+    """Publish a private/draft video immediately (privacyStatus -> public).
+
+    Returns the public watch URL. Raises RuntimeError on failure.
+    """
+    _require_creds()
+    if not video_id:
+        raise RuntimeError("video_id is required to publish")
+    from googleapiclient.errors import HttpError
+
+    youtube = get_youtube_client()
+    body = {
+        "id": video_id,
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+    try:
+        youtube.videos().update(part="status", body=body).execute()
+        log.info("Published video %s (now public)", video_id)
+        return f"https://youtu.be/{video_id}"
+    except HttpError as exc:
+        log.exception("YouTube publish failed")
+        raise RuntimeError(f"YouTube publish failed: {exc}") from exc
+
+
 def get_video_stats(video_ids: List[str]) -> dict:
     """Fetch live statistics for up to 50 video ids in one call.
 

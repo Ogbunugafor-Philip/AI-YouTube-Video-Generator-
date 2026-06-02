@@ -13,7 +13,17 @@ from fastapi.staticfiles import StaticFiles
 from core import jobs
 from core.config import config
 from core.logger import get_logger
-from routers import admin, audio, history, news, options, script, thumbnail, video
+from routers import (
+    admin,
+    audio,
+    fcm,
+    history,
+    news,
+    options,
+    script,
+    thumbnail,
+    video,
+)
 
 log = get_logger(__name__)
 
@@ -41,6 +51,7 @@ app.include_router(admin.router)
 app.include_router(news.router)
 app.include_router(options.router)
 app.include_router(history.router)
+app.include_router(fcm.router)
 
 # Serve produced media (final video, thumbnail) so the frontend can display it.
 config.ensure_dirs()
