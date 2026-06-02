@@ -52,8 +52,10 @@ export const api = {
   },
   progressUrl: (jobId) => `/api/video/progress/${jobId}`,
   downloadUrl: (jobId) => `/api/video/download/${jobId}`,
-  // thumbnail.jpg is served from OUTPUT_DIR via /media. Cache-bust on demand.
-  thumbnailUrl: (bust) => `/media/thumbnail.jpg${bust ? `?t=${bust}` : ''}`,
+  // Per-job thumbnail served from OUTPUT_DIR/<jobId>/thumbnail.jpg via /media.
+  // Cache-bust on demand (e.g. after regeneration).
+  thumbnailUrl: (jobId, bust) =>
+    `/media/${jobId}/thumbnail.jpg${bust ? `?t=${bust}` : ''}`,
 }
 
 // --- Tiny localStorage-backed store so job data survives navigation/refresh ---

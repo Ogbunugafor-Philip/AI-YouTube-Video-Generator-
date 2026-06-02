@@ -112,13 +112,18 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
         ffmpeg_service,
         youtube_service,
         gmail_service,
+        push_service,
     )
     from core import stats
+    from core.config import config
 
+    # Each auto-production gets its own job_id so its media lives in isolated
+    # per-job dirs — concurrent runs never collide and cleanup is exact.
+    job_id = story.get("story_id") or new_job_id()
     title = story.get("title", "Breaking AI News")
     summary = story.get("summary") or story.get("title", "")
     duration = int(story.get("recommended_duration", 3))
-    log.info("Auto-producing news video: %r (%d min)", title[:60], duration)
+    log.info("Auto-producing news video: %r (%d min) job=%s", title[:60], duration, job_id)
 
     # 1-4: scripting (LLM calls are sync — run off the event loop).
     script = await asyncio.to_thread(
@@ -128,13 +133,20 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
     gen_title = await asyncio.to_thread(llm_service.generate_title, script)
     seo = await asyncio.to_thread(llm_service.generate_seo, gen_title, script)
 
-    # 5-8: media generation (already async).
-    narration = await fal_service.generate_voice(script)
-    clips = await fal_service.generate_all_clips(scenes)
-    video_path = await ffmpeg_service.assemble_video(clips, narration)
-    thumbnail_path = await fal_service.generate_thumbnail(gen_title, script)
+    # 5-8: media generation (already async), scoped to this job_id.
+    narration = await fal_service.generate_voice(script, job_id=job_id)
+    clips = await fal_service.generate_all_clips(scenes, job_id=job_id)
+    video_path = await ffmpeg_service.assemble_video(clips, narration, job_id=job_id)
+    thumbnail_path = await fal_service.generate_thumbnail(
+        gen_title, script, job_id=job_id
+    )
 
-    # 9: upload to YouTube as a private draft (sync client).
+    # 9: upload to YouTube. Optionally auto-schedule the draft to publish later.
+    publish_at = None
+    if config.YOUTUBE_AUTO_SCHEDULE_HOURS > 0:
+        publish_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            hours=config.YOUTUBE_AUTO_SCHEDULE_HOURS
+        )
     video_id, draft_url = await asyncio.to_thread(
         youtube_service.upload_to_youtube,
         video_path,
@@ -142,9 +154,11 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
         gen_title,
         seo.get("description", ""),
         seo.get("tags", []),
+        publish_at,
     )
 
-    # 10: notify the creator.
+    # 10: notify the creator (push + email).
+    await asyncio.to_thread(push_service.send_draft_ready_push, gen_title, draft_url)
     await asyncio.to_thread(
         gmail_service.send_draft_ready_notification, gen_title, draft_url
     )
@@ -152,7 +166,7 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
     # Record in stats history.
     stats.record_auto_video()
     stats.record_video(
-        job_id=story.get("story_id", new_job_id()),
+        job_id=job_id,
         title=gen_title,
         date=datetime.datetime.now().isoformat(timespec="seconds"),
         duration_minutes=duration,
@@ -164,8 +178,35 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
             4,
         ),
     )
-    log.info("News video produced: video_id=%s", video_id)
+
+    # 11: the upload succeeded — delete this job's produced files from the VPS.
+    cleanup_job_files(job_id)
+
+    log.info("News video produced + cleaned up: video_id=%s", video_id)
     return {"video_id": video_id, "draft_url": draft_url, "title": gen_title}
+
+
+def cleanup_job_files(job_id: str) -> int:
+    """Delete a job's per-job temp + output dirs (final video, thumbnail, clips).
+
+    Called after a confirmed YouTube upload so produced media doesn't pile up on
+    the VPS. Returns the number of bytes freed. Never raises.
+    """
+    import shutil
+    from core.config import config
+
+    freed = 0
+    for base in (config.TEMP_DIR / job_id, config.OUTPUT_DIR / job_id):
+        if base.exists():
+            try:
+                for p in base.glob("**/*"):
+                    if p.is_file():
+                        freed += p.stat().st_size
+                shutil.rmtree(base, ignore_errors=True)
+            except OSError as exc:
+                log.warning("cleanup_job_files: could not remove %s: %s", base, exc)
+    log.info("cleanup_job_files(%s): freed %.2f MB", job_id, freed / (1024 * 1024))
+    return freed
 
 
 async def news_monitor_job() -> None:

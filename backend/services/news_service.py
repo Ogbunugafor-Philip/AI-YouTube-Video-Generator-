@@ -13,22 +13,37 @@ from typing import Any, Dict, List
 import feedparser
 import requests
 
+from core.config import config
 from core.logger import get_logger
 from services import llm_service
 
 log = get_logger(__name__)
 
-# (source label, feed URL)
+# (source label, feed URL). Reddit exposes per-subreddit RSS; Twitter/X has no
+# stable free RSS, so it's pulled from a user-configured TWITTER_RSS_URL
+# (RSSHub / Nitter) appended at fetch time. Any feed that fails is skipped
+# without aborting the rest.
 NEWS_FEEDS = [
     ("Google News", "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en"),
     ("TechCrunch", "https://techcrunch.com/feed/"),
     ("The Verge", "https://www.theverge.com/rss/index.xml"),
     ("Wired", "https://www.wired.com/feed/rss"),
+    ("Reddit r/artificial", "https://www.reddit.com/r/artificial/.rss"),
+    ("Reddit r/technology", "https://www.reddit.com/r/technology/top/.rss?t=day"),
+    ("Reddit r/OpenAI", "https://www.reddit.com/r/OpenAI/.rss"),
 ]
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; VidGenNewsBot/1.0)"}
 _FETCH_TIMEOUT = 15
 _MAX_PER_FEED = 10  # cap stories pulled per feed to keep scoring costs sane
+
+
+def _active_feeds() -> List[tuple]:
+    """Static feeds plus the optional Twitter/X source if configured."""
+    feeds = list(NEWS_FEEDS)
+    if config.TWITTER_RSS_URL:
+        feeds.append(("Twitter/X", config.TWITTER_RSS_URL))
+    return feeds
 
 
 def _story_id(title: str, url: str) -> str:
@@ -51,7 +66,7 @@ def fetch_breaking_news() -> List[Dict[str, Any]]:
     published_date. Network/parse failures on one feed never abort the others.
     """
     stories: List[Dict[str, Any]] = []
-    for source, url in NEWS_FEEDS:
+    for source, url in _active_feeds():
         try:
             log.info("Fetching feed: %s", source)
             resp = requests.get(url, headers=_HEADERS, timeout=_FETCH_TIMEOUT)

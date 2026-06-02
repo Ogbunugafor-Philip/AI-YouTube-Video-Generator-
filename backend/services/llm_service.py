@@ -230,7 +230,7 @@ def split_into_scenes(script_text: str) -> List[Dict[str, Any]]:
         "ALWAYS respond with a single valid JSON array and absolutely nothing else."
     )
     user = (
-        "Split the narration script below into between 30 and 35 sequential scenes.\n\n"
+        "Split the narration script below into between 30 and 40 sequential scenes.\n\n"
         "STRICT OUTPUT RULES:\n"
         "- Return ONLY a JSON array. No prose, no explanation, no markdown, no code "
         "fences, no backticks.\n"

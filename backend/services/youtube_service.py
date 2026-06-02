@@ -59,10 +59,14 @@ def upload_to_youtube(
     title: str,
     description: str,
     tags: List[str],
+    publish_at: Any = None,
 ) -> Tuple[str, str]:
     """Upload ``video_path`` as a PRIVATE draft, set its thumbnail + metadata.
 
-    Returns (video_id, draft_url). Raises RuntimeError on failure.
+    If ``publish_at`` is given (a datetime or an RFC3339 string), the draft is
+    scheduled to auto-publish at that time (YouTube requires privacyStatus to
+    stay ``private`` for scheduled videos). Otherwise it stays a private draft
+    for manual review. Returns (video_id, draft_url). Raises on failure.
     """
     _require_creds()
     if not Path(video_path).exists():
@@ -73,6 +77,23 @@ def upload_to_youtube(
 
     youtube = get_youtube_client()
 
+    status: dict = {
+        "privacyStatus": "private",  # upload as private draft
+        "selfDeclaredMadeForKids": False,
+    }
+    if publish_at is not None:
+        # Accept a datetime or a pre-formatted RFC3339 string.
+        if hasattr(publish_at, "isoformat"):
+            publish_at_str = publish_at.isoformat()
+            if publish_at_str.endswith("+00:00"):
+                publish_at_str = publish_at_str[:-6] + "Z"
+            elif "+" not in publish_at_str and "Z" not in publish_at_str:
+                publish_at_str += "Z"
+        else:
+            publish_at_str = str(publish_at)
+        status["publishAt"] = publish_at_str
+        log.info("Scheduling draft to auto-publish at %s", publish_at_str)
+
     body = {
         "snippet": {
             "title": title[:100],
@@ -80,10 +101,7 @@ def upload_to_youtube(
             "tags": tags[:15],
             "categoryId": "28",  # Science & Technology
         },
-        "status": {
-            "privacyStatus": "private",  # upload as private draft
-            "selfDeclaredMadeForKids": False,
-        },
+        "status": status,
     }
 
     try:

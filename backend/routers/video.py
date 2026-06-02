@@ -43,7 +43,7 @@ async def run_production(job_id: str) -> None:
                         step="Generating voice narration", percentage=5)
 
         # 1) Narration voice.
-        narration_path = await fal_service.generate_voice(script_text)
+        narration_path = await fal_service.generate_voice(script_text, job_id=job_id)
 
         # 2) Scene clips in parallel (emits per-scene progress 10% -> 70%).
         await jobs.emit(job_id, event="progress",
@@ -53,12 +53,16 @@ async def run_production(job_id: str) -> None:
         # 3) Assemble.
         await jobs.emit(job_id, event="progress",
                         step="Assembling video", percentage=75)
-        video_path = await ffmpeg_service.assemble_video(clips, narration_path)
+        video_path = await ffmpeg_service.assemble_video(
+            clips, narration_path, job_id=job_id
+        )
 
         # 4) Thumbnail.
         await jobs.emit(job_id, event="progress",
                         step="Generating thumbnail", percentage=90)
-        thumbnail_path = await fal_service.generate_thumbnail(title, script_text)
+        thumbnail_path = await fal_service.generate_thumbnail(
+            title, script_text, job_id=job_id
+        )
 
         # Record stats for the admin dashboard.
         duration = int(job.get("duration_minutes", 3))

@@ -23,7 +23,9 @@ async def regenerate(req: ThumbnailRegenerateRequest) -> ThumbnailResponse:
     title = req.title or job.get("title", "Untitled Video")
     script_text = job.get("script_text", "")
     try:
-        path = await fal_service.generate_thumbnail(title, script_text)
+        path = await fal_service.generate_thumbnail(
+            title, script_text, job_id=req.job_id
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

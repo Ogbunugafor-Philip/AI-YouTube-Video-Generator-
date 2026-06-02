@@ -75,14 +75,18 @@ async def _fal_run(model: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Video clips
 # --------------------------------------------------------------------------- #
-async def generate_video_clip(visual_description: str, scene_number: int) -> str:
+async def generate_video_clip(
+    visual_description: str, scene_number: int, job_id: Optional[str] = None
+) -> str:
     """Generate a short (5-8s) clip for one scene and save it to TEMP_DIR.
 
     The configured video model (e.g. SVD) is image-conditioned, so we first
     render a still from the visual description with the image model, then animate
-    it. Returns the local clip path.
+    it. Returns the local clip path. Written into a per-job temp dir when
+    ``job_id`` is given so concurrent productions never overwrite each other.
     """
-    dest = config.TEMP_DIR / f"scene_{scene_number}.mp4"
+    base = config.job_temp_dir(job_id) if job_id else config.TEMP_DIR
+    dest = base / f"scene_{scene_number}.mp4"
     log.info("Generating clip for scene %d", scene_number)
 
     # 1) Render a conditioning still from the prompt.
@@ -138,6 +142,7 @@ async def generate_all_clips(
                 path = await generate_video_clip(
                     scene.get("visual_description", ""),
                     scene.get("scene_number", idx + 1),
+                    job_id=job_id,
                 )
                 results[idx] = path
             except Exception as exc:  # noqa: BLE001
@@ -166,9 +171,10 @@ async def generate_all_clips(
 # --------------------------------------------------------------------------- #
 # Voice narration
 # --------------------------------------------------------------------------- #
-async def generate_voice(script_text: str) -> str:
+async def generate_voice(script_text: str, job_id: Optional[str] = None) -> str:
     """Generate professional narration audio and save it to TEMP_DIR/narration.mp3."""
-    dest = config.TEMP_DIR / "narration.mp3"
+    base = config.job_temp_dir(job_id) if job_id else config.TEMP_DIR
+    dest = base / "narration.mp3"
     log.info("Generating narration audio (%d chars)", len(script_text))
     if not script_text.strip():
         raise RuntimeError("Cannot generate voice from empty script")
@@ -190,9 +196,12 @@ async def generate_voice(script_text: str) -> str:
 # --------------------------------------------------------------------------- #
 # Thumbnail
 # --------------------------------------------------------------------------- #
-async def generate_thumbnail(title: str, script_text: str) -> str:
+async def generate_thumbnail(
+    title: str, script_text: str, job_id: Optional[str] = None
+) -> str:
     """Generate a striking YouTube thumbnail saved to OUTPUT_DIR/thumbnail.jpg."""
-    dest = config.OUTPUT_DIR / "thumbnail.jpg"
+    base = config.job_output_dir(job_id) if job_id else config.OUTPUT_DIR
+    dest = base / "thumbnail.jpg"
     log.info("Generating thumbnail for title %r", title)
     theme = script_text[:300].replace("\n", " ")
     prompt = (

@@ -50,7 +50,7 @@ export default function Result() {
 
       <div className="result-grid">
         <VideoPlayer src={api.downloadUrl(job.job_id)} />
-        <ThumbnailPreview src={api.thumbnailUrl(thumbBust)} title={job.title} />
+        <ThumbnailPreview src={api.thumbnailUrl(job.job_id, thumbBust)} title={job.title} />
       </div>
 
       <div className="actions">
