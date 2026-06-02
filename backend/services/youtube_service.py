@@ -63,20 +63,35 @@ def _credentials() -> Any:
     )
 
 
-def get_youtube_client() -> Any:
-    """Build an authenticated YouTube Data API v3 client."""
-    from googleapiclient.discovery import build
+# Built clients are cached so we don't re-fetch the API discovery document on
+# every call (history pulls fresh stats on each load). The credentials inside
+# auto-refresh, so a cached client stays valid.
+_YT_CLIENT: Any = None
+_ANALYTICS_CLIENT: Any = None
 
-    return build("youtube", "v3", credentials=_credentials(), cache_discovery=False)
+
+def get_youtube_client() -> Any:
+    """Build (and cache) an authenticated YouTube Data API v3 client."""
+    global _YT_CLIENT
+    if _YT_CLIENT is None:
+        from googleapiclient.discovery import build
+
+        _YT_CLIENT = build(
+            "youtube", "v3", credentials=_credentials(), cache_discovery=False
+        )
+    return _YT_CLIENT
 
 
 def get_analytics_client() -> Any:
-    """Build an authenticated YouTube Analytics API v2 client."""
-    from googleapiclient.discovery import build
+    """Build (and cache) an authenticated YouTube Analytics API v2 client."""
+    global _ANALYTICS_CLIENT
+    if _ANALYTICS_CLIENT is None:
+        from googleapiclient.discovery import build
 
-    return build(
-        "youtubeAnalytics", "v2", credentials=_credentials(), cache_discovery=False
-    )
+        _ANALYTICS_CLIENT = build(
+            "youtubeAnalytics", "v2", credentials=_credentials(), cache_discovery=False
+        )
+    return _ANALYTICS_CLIENT
 
 
 def upload_to_youtube(
