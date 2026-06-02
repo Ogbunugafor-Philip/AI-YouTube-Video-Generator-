@@ -137,7 +137,7 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
     script = await asyncio.to_thread(
         llm_service.generate_script, summary, duration, "news"
     )
-    scenes = await asyncio.to_thread(llm_service.split_into_scenes, script)
+    scenes = await asyncio.to_thread(llm_service.split_into_scenes, script, duration)
     gen_title = await asyncio.to_thread(llm_service.generate_title, script)
     seo = await asyncio.to_thread(llm_service.generate_seo, gen_title, script)
 

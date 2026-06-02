@@ -49,7 +49,7 @@ async def generate(req: ScriptGenerateRequest) -> ScriptGenerateResponse:
         raise HTTPException(status_code=400, detail=f"Unknown mode: {mode}")
 
     try:
-        scenes = llm_service.split_into_scenes(script_text)
+        scenes = llm_service.split_into_scenes(script_text, req.duration_minutes)
         title = llm_service.generate_title(script_text)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -89,13 +89,19 @@ async def approve(req: ScriptApproveRequest) -> ScriptApproveResponse:
         and req.script_text != script_text
     ):
         script_text = req.script_text
+
+    duration_minutes = max(1, round(len(script_text.split()) / WORDS_PER_MINUTE))
+
+    if (
+        req.script_text is not None
+        and req.script_text.strip()
+        and req.script_text != job.get("script_text", "")
+    ):
         try:
-            scenes = llm_service.split_into_scenes(script_text)
+            scenes = llm_service.split_into_scenes(script_text, duration_minutes)
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         resplit = True
-
-    duration_minutes = max(1, round(len(script_text.split()) / WORDS_PER_MINUTE))
     jobs.update_job(
         req.job_id,
         status="approved",

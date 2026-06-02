@@ -1,8 +1,9 @@
 """fal.ai-powered script generation.
 
 Handles turning a topic (or a user write-up) into a narration script, splitting
-that script into 30-40 scenes with visual prompts, and generating a title + SEO
-metadata. Every model call is wrapped in error handling and logging.
+that script into duration-bounded scenes (<=17) with coherent visual prompts,
+and generating a title + SEO metadata. Every model call is wrapped in error
+handling and logging.
 
 Backed by fal.ai's ``fal-ai/any-llm`` endpoint via the ``fal_client`` SDK, using
 ``FAL_LLM_CHAT_MODEL`` as the model. fal_client authenticates from the FAL_KEY
@@ -216,118 +217,260 @@ def generate_script(topic: str, duration_minutes: int, mode: str) -> str:
     return script
 
 
-def split_into_scenes(script_text: str) -> List[Dict[str, Any]]:
-    """Split a narration script into 30-40 scenes with visual prompts.
+def _max_scenes(duration_minutes: int) -> int:
+    """Maximum scene count for a video duration. Hard cap of 17 scenes.
 
-    IMPORTANT: narration_text must be drawn from the supplied script verbatim —
-    the model reorganises the text into scenes but must never rewrite it.
+    3 min -> 10, 4 min -> 13, 5 min (and above) -> 17.
     """
-    log.info("Splitting script into scenes (%d chars)", len(script_text))
+    try:
+        d = int(duration_minutes)
+    except (TypeError, ValueError):
+        d = 3
+    if d <= 3:
+        return 10
+    if d == 4:
+        return 13
+    return 17  # 5+ minutes, never more than 17
+
+
+def _segment_narration(script_text: str, n: int) -> List[str]:
+    """Split the script into exactly ``n`` contiguous, roughly-equal segments.
+
+    Every word is covered (verbatim, in order), segments are near-equal in
+    length, and the final segment always ends on the last word of the script.
+    Splits on sentence boundaries when there are enough sentences, otherwise on
+    words. Returns fewer than ``n`` only when the script has fewer than ``n``
+    words.
+    """
+    text = re.sub(r"\s+", " ", (script_text or "").strip())
+    if not text:
+        return []
+    n = max(1, int(n))
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    units = sentences if len(sentences) >= n else text.split()
+    n = min(n, len(units)) or 1
+    total = len(units)
+    segments: List[str] = []
+    for k in range(n):
+        start = (k * total) // n
+        end = ((k + 1) * total) // n
+        seg = " ".join(units[start:end]).strip()
+        if seg:
+            segments.append(seg)
+    return segments
+
+
+def split_into_scenes(
+    script_text: str, duration_minutes: int = 3
+) -> List[Dict[str, Any]]:
+    """Split a narration script into duration-bounded scenes with clean visuals.
+
+    Scene count is capped by duration (3min->10, 4min->13, 5min->17, hard cap
+    17). Narration is segmented deterministically so every word is covered,
+    segments are roughly equal, and the last scene ends on the last word. Each
+    visual description is validated for coherent English (10-50 words) and any
+    failure is regenerated automatically before returning.
+    """
+    n = _max_scenes(duration_minutes)
+    log.info(
+        "Splitting script into <=%d scenes (%d chars, %s min)",
+        n, len(script_text), duration_minutes,
+    )
+
+    segments = _segment_narration(script_text, n)
+    if not segments:
+        return []
+    descriptions = _generate_visual_descriptions(segments)
+
+    scenes: List[Dict[str, Any]] = []
+    for i, (narration, desc) in enumerate(zip(segments, descriptions), start=1):
+        scenes.append(
+            {
+                "scene_number": i,
+                "narration_text": narration,
+                "visual_description": desc,
+            }
+        )
+    log.info("Produced %d scenes (cap %d)", len(scenes), n)
+    return scenes
+
+
+# --------------------------------------------------------------------------- #
+# Visual description generation + coherence validation (anti-gibberish)
+# --------------------------------------------------------------------------- #
+_DESC_MIN_WORDS = 10
+_DESC_MAX_WORDS = 50
+
+
+def _clean_desc(text: str) -> str:
+    """Strip fences/quotes/labels, collapse whitespace, cap at MAX words."""
+    t = (text or "").strip()
+    if "```" in t:
+        t = re.sub(r"```(?:json)?", "", t).replace("```", "")
+    t = t.strip().strip('"').strip("'").strip()
+    # Drop a leading "Scene 3:" / "1." style label if the model added one.
+    t = re.sub(r"^\s*(scene\s*\d+\s*[:\-\.]|\d+\s*[:\-\.])\s*", "", t, flags=re.I)
+    t = re.sub(r"\s+", " ", t).strip()
+    words = t.split()
+    if len(words) > _DESC_MAX_WORDS:
+        t = " ".join(words[:_DESC_MAX_WORDS]).rstrip(",;:- ") + "."
+    return t
+
+
+def _is_coherent_description(desc: str) -> bool:
+    """Validate a visual description: 10-50 words of coherent English.
+
+    Rejects gibberish — random consonant runs, over-long tokens, or mostly
+    non-alphabetic content.
+    """
+    if not desc or not desc.strip():
+        return False
+    n_words = len(desc.split())
+    if n_words < _DESC_MIN_WORDS or n_words > _DESC_MAX_WORDS:
+        return False
+    letters = re.findall(r"[A-Za-z']+", desc)
+    if len(letters) < 8:
+        return False
+
+    def _wordish(w: str) -> bool:
+        # Real English-ish word: sane length and contains a vowel.
+        return 2 <= len(w) <= 18 and bool(re.search(r"[aeiouy]", w, re.I))
+
+    good = sum(1 for w in letters if _wordish(w))
+    return (good / len(letters)) >= 0.75
+
+
+def _fallback_description(narration: str) -> str:
+    """Deterministic, always-valid cinematic description from the narration."""
+    subject = " ".join(
+        re.sub(r"[^A-Za-z0-9 ]", " ", narration).split()[:10]
+    ).strip()
+    if not subject:
+        subject = "the topic being narrated"
+    return (
+        f"Cinematic wide establishing shot illustrating {subject}, with natural "
+        "lighting, clear focused composition and smooth subtle camera motion."
+    )
+
+
+def _regenerate_description(narration: str, attempts: int = 3) -> str:
+    """Regenerate one coherent visual description, with a safe fallback."""
+    for _ in range(attempts):
+        try:
+            raw = _chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a cinematographer. You reply with ONE "
+                        "clean, coherent visual shot description in plain English, "
+                        "and nothing else.",
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Write ONE concrete, coherent, cinematic visual shot "
+                            "description (1-2 sentences, between 10 and 50 words, "
+                            "plain English, absolutely no gibberish) that an AI "
+                            "video generator can render for this narration line:\n\n"
+                            f"\"{narration[:400]}\"\n\n"
+                            "Name a clear subject, setting and lighting. Return ONLY "
+                            "the description text."
+                        ),
+                    },
+                ],
+                temperature=0.5,
+                max_tokens=120,
+            )
+        except RuntimeError:
+            break
+        cand = _clean_desc(raw)
+        if _is_coherent_description(cand):
+            return cand
+    return _fallback_description(narration)
+
+
+def _salvage_desc_lines(raw: str) -> List[str]:
+    """Recover descriptions from a near-JSON / numbered list the parser rejected.
+
+    Best-effort: strips brackets, quotes and numbering line by line. Anything
+    salvaged still passes through coherence validation, so a bad guess is simply
+    regenerated — this only avoids unnecessary per-scene LLM calls.
+    """
+    out: List[str] = []
+    for line in raw.splitlines():
+        s = line.strip().strip(",").strip("[]").strip()
+        s = re.sub(r"^\s*\d+\s*[\.\)\:]\s*", "", s)
+        s = s.strip().strip('"').strip("'").strip()
+        if len(s.split()) >= 5:
+            out.append(_clean_desc(s))
+    return out
+
+
+def _generate_visual_descriptions(segments: List[str]) -> List[str]:
+    """Generate a coherent cinematic description for each narration segment.
+
+    One batched LLM call, then per-scene validation + automatic regeneration of
+    any description that is gibberish or outside the 10-50 word range.
+    """
+    n = len(segments)
+    numbered = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
     system = (
-        "You are a professional video director and AI prompt engineer. You split a "
-        "finished narration script into sequential video scenes. You MUST NOT "
-        "rewrite, summarise, or alter the narration wording — only segment it. You "
-        "ALWAYS respond with a single valid JSON array and absolutely nothing else."
+        "You are a professional cinematographer and prompt engineer. For each "
+        "numbered narration line you write ONE clean, coherent, cinematic visual "
+        "shot description in plain English. You ALWAYS reply with a single valid "
+        "JSON array of strings and nothing else."
     )
     user = (
-        "Split the narration script below into between 30 and 40 sequential scenes.\n\n"
-        "STRICT OUTPUT RULES:\n"
-        "- Return ONLY a JSON array. No prose, no explanation, no markdown, no code "
-        "fences, no backticks.\n"
-        "- The FIRST character of your response must be '[' and the LAST must be ']'.\n"
-        "- Each array element is an object with EXACTLY these three fields:\n"
-        '    "scene_number": integer starting at 1, increasing by 1;\n'
-        '    "narration_text": string taken VERBATIM from the script (never reworded);\n'
-        '    "visual_description": string.\n'
-        "- Concatenating every narration_text in order MUST reproduce the original "
-        "script exactly (do not change, add, or drop any words).\n"
-        "- visual_description must be a RICH, SPECIFIC, CINEMATIC prompt for an AI "
-        "video generator: name the subject, the setting/location, lighting, camera "
-        "angle, mood and style. Avoid generic templates.\n"
-        '- Example of a good visual_description: "A sleek Nigerian bank interior in '
-        "Lagos, modern teller stations with holographic AI displays, well-dressed "
-        'bank staff assisting customers, warm lighting, 4K cinematic quality".\n\n'
-        f"SCRIPT:\n{script_text}"
+        f"Write exactly {n} visual shot descriptions — one per narration line "
+        "below, in the same order.\n\n"
+        "STRICT RULES for every description:\n"
+        "- 1 to 2 sentences, between 10 and 50 words.\n"
+        "- Clean, coherent, real English. NO gibberish, NO random words, NO "
+        "nonsense, NO invented words.\n"
+        "- Describe a concrete shot: name the subject, the setting/location, the "
+        "lighting, and the camera angle/mood. It must read as a sensible "
+        "instruction to an AI video generator.\n"
+        "- Do NOT include the scene number or repeat the narration text.\n\n"
+        f"OUTPUT: ONLY a JSON array of exactly {n} strings. The first character "
+        "must be '[' and the last ']'. No markdown, no code fences, no commentary.\n\n"
+        f"NARRATION LINES:\n{numbered}"
     )
-    raw = _chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0.3,
-        max_tokens=8192,
-    )
-
-    # Robust parse, in order of preference:
-    #   1) json.loads / regex array extraction (clean output),
-    #   2) brace-scan salvage of complete objects (handles fences/trailing/truncation),
-    #   3) deterministic sentence splitter (last resort, with a warning).
-    data: Any = None
+    descs: List[str] = []
+    raw = ""
     try:
-        data = _extract_json(raw)
-    except ValueError as exc:
-        log.warning("Scene array parse failed (%s); attempting object salvage", exc)
-
-    if not isinstance(data, list):
-        salvaged = _salvage_objects(raw)
-        if salvaged:
-            log.info("Salvaged %d scene objects from non-array output", len(salvaged))
-            data = salvaged
-        else:
-            log.warning("⚠ Scene JSON parse FAILED. Falling back to sentence "
-                        "splitter. Raw model output was:\n%s", raw[:1500])
-            return _fallback_split(script_text)
-
-    scenes: List[Dict[str, Any]] = []
-    for i, item in enumerate(data, start=1):
-        if not isinstance(item, dict):
-            continue
-        narration = str(item.get("narration_text", "")).strip()
-        if not narration:
-            continue
-        scenes.append(
-            {
-                "scene_number": int(item.get("scene_number", i)),
-                "narration_text": narration,
-                "visual_description": str(item.get("visual_description", "")).strip(),
-            }
+        raw = _chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.4,
+            max_tokens=2048,
         )
-    if not scenes:
-        log.warning("⚠ Parsed JSON produced no usable scenes. Falling back to "
-                    "sentence splitter. Raw output:\n%s", raw[:1500])
-        return _fallback_split(script_text)
-    # Renumber sequentially to guarantee order integrity.
-    for i, s in enumerate(scenes, start=1):
-        s["scene_number"] = i
-    log.info("Produced %d scenes from LLM JSON", len(scenes))
-    return scenes
+    except RuntimeError as exc:
+        log.warning("Description batch LLM call failed (%s)", exc)
+    if raw:
+        try:
+            data = _extract_json(raw)
+            if isinstance(data, list):
+                descs = [_clean_desc(str(x)) for x in data]
+        except ValueError:
+            descs = _salvage_desc_lines(raw)
+        if not descs:
+            descs = _salvage_desc_lines(raw)
 
+    # Align to the number of segments.
+    descs = (descs + [""] * n)[:n]
 
-def _fallback_split(script_text: str, target: int = 32) -> List[Dict[str, Any]]:
-    """Deterministic sentence-based split used if the model output is unusable.
-
-    Preserves the user's wording exactly (critical for write-up mode).
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", script_text.strip())
-    sentences = [s for s in sentences if s]
-    if not sentences:
-        sentences = [script_text.strip()]
-    # Group sentences so we land near `target` scenes.
-    n = min(max(len(sentences), 1), max(target, 1))
-    per = max(1, len(sentences) // n)
-    scenes: List[Dict[str, Any]] = []
-    for i in range(0, len(sentences), per):
-        chunk = " ".join(sentences[i : i + per]).strip()
-        if not chunk:
-            continue
-        scenes.append(
-            {
-                "scene_number": len(scenes) + 1,
-                "narration_text": chunk,
-                "visual_description": (
-                    f"Cinematic, high-quality visual illustrating: {chunk[:200]}. "
-                    "Modern, clean, vibrant, smooth subtle motion."
-                ),
-            }
+    out: List[str] = []
+    regenerated = 0
+    for seg, d in zip(segments, descs):
+        if not _is_coherent_description(d):
+            d = _regenerate_description(seg)
+            regenerated += 1
+        out.append(d)
+    if regenerated:
+        log.info(
+            "Regenerated %d/%d visual descriptions that failed validation",
+            regenerated, n,
         )
-    return scenes
+    return out
 
 
 def generate_title(script_text: str) -> str:
