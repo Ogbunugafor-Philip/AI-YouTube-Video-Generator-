@@ -36,11 +36,19 @@ class ScriptGenerateResponse(BaseModel):
 
 class ScriptApproveRequest(BaseModel):
     job_id: str
+    # Optional edited script (rich editor). When provided and changed, scenes
+    # are re-split from it. Approve no longer auto-starts production — the
+    # pre-production screens (style/voice/scene editor) come first.
+    script_text: Optional[str] = None
 
 
 class ScriptApproveResponse(BaseModel):
     job_id: str
     status: str
+    script_text: str
+    duration_minutes: int
+    scenes: List[Scene]
+    resplit: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -51,6 +59,9 @@ class VideoProduceRequest(BaseModel):
     scenes: Optional[List[Scene]] = None
     script_text: Optional[str] = None
     title: Optional[str] = None
+    # Phase 3 pre-production choices.
+    voice: Optional[str] = None          # voice id from the catalog
+    video_style: Optional[str] = None    # style id from the catalog
 
 
 class VideoProduceResponse(BaseModel):
@@ -58,6 +69,16 @@ class VideoProduceResponse(BaseModel):
     status: str
     video_path: Optional[str] = None
     thumbnail_path: Optional[str] = None
+
+
+class VideoUploadRequest(BaseModel):
+    job_id: str
+
+
+class VideoUploadResponse(BaseModel):
+    job_id: str
+    youtube_video_id: str
+    draft_url: str
 
 
 # --------------------------------------------------------------------------- #

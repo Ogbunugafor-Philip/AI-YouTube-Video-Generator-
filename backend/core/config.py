@@ -34,7 +34,7 @@ class Config:
     FAL_API_KEY: str = _get("FAL_API_KEY")
     FAL_VIDEO_MODEL: str = _get("FAL_VIDEO_MODEL", "fal-ai/fast-svd-lcm")
     FAL_IMAGE_MODEL: str = _get("FAL_IMAGE_MODEL", "fal-ai/flux/schnell")
-    FAL_TTS_MODEL: str = _get("FAL_TTS_MODEL", "fal-ai/playai-tts")
+    FAL_TTS_MODEL: str = _get("FAL_TTS_MODEL", "fal-ai/kokoro")
     # LLM (script generation) via fal-ai/any-llm.
     FAL_LLM_MODEL: str = _get("FAL_LLM_MODEL", "fal-ai/any-llm")
     FAL_LLM_CHAT_MODEL: str = _get("FAL_LLM_CHAT_MODEL", "openai/gpt-oss-120b")

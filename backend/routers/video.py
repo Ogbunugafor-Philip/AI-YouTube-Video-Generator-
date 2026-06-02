@@ -9,15 +9,22 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from core import jobs, stats
+from core.config import config
 from core.logger import get_logger
-from models.schemas import VideoProduceRequest, VideoProduceResponse
-from services import fal_service, ffmpeg_service
+from models.schemas import (
+    VideoProduceRequest,
+    VideoProduceResponse,
+    VideoUploadRequest,
+    VideoUploadResponse,
+)
+from services import fal_service, ffmpeg_service, styles, subtitle_service, voices
 
 log = get_logger(__name__)
 
@@ -37,34 +44,54 @@ async def run_production(job_id: str) -> None:
     script_text = job.get("script_text", "")
     scenes = job.get("scenes", [])
     title = job.get("title", "Untitled Video")
+    video_style = job.get("video_style", "")
+    voice_id = job.get("voice", "")
+    voice_string = voices.resolve_voice_string(voice_id)
 
     try:
         await jobs.emit(job_id, event="progress", status="processing",
-                        step="Generating voice narration", percentage=5)
+                        step="Generating scene clips", percentage=5)
 
-        # 1) Narration voice.
-        narration_path = await fal_service.generate_voice(script_text, job_id=job_id)
-
-        # 2) Scene clips in parallel (emits per-scene progress 10% -> 70%).
+        # 1) Scene clips in parallel (emits per-scene progress 10% -> 70%).
+        #    The chosen video style is prepended to every visual description.
+        styled_scenes = styles.apply_style(scenes, video_style)
         await jobs.emit(job_id, event="progress",
                         step=f"Generating {len(scenes)} scene clips", percentage=10)
-        clips = await fal_service.generate_all_clips(scenes, job_id=job_id)
+        clips = await fal_service.generate_all_clips(styled_scenes, job_id=job_id)
 
-        # 3) Assemble.
+        # 2) Narration voice (selected voice).
         await jobs.emit(job_id, event="progress",
-                        step="Assembling video", percentage=75)
+                        step="Generating voice narration", percentage=72)
+        narration_path = await fal_service.generate_voice(
+            script_text, job_id=job_id, voice=voice_string
+        )
+
+        # 3) Assemble clips + narration.
+        await jobs.emit(job_id, event="progress",
+                        step="Assembling video", percentage=80)
         video_path = await ffmpeg_service.assemble_video(
             clips, narration_path, job_id=job_id
         )
 
-        # 4) Thumbnail.
+        # 4) Subtitles: build an SRT from the script and burn it in.
         await jobs.emit(job_id, event="progress",
-                        step="Generating thumbnail", percentage=90)
+                        step="Adding subtitles", percentage=88)
+        try:
+            audio_dur = await ffmpeg_service._probe_duration(narration_path)
+            srt_path = subtitle_service.generate_srt(script_text, audio_dur or 0, job_id)
+            video_path = await ffmpeg_service.burn_subtitles(video_path, srt_path, job_id)
+            jobs.update_job(job_id, subtitle_path=srt_path)
+        except Exception as sub_exc:  # noqa: BLE001
+            log.error("Subtitle step failed (non-fatal): %s", sub_exc)
+
+        # 5) Thumbnail.
+        await jobs.emit(job_id, event="progress",
+                        step="Generating thumbnail", percentage=94)
         thumbnail_path = await fal_service.generate_thumbnail(
             title, script_text, job_id=job_id
         )
 
-        # Record stats for the admin dashboard.
+        # Record stats + history metadata for the admin dashboard / library.
         duration = int(job.get("duration_minutes", 3))
         est_cost = round(
             stats.COST_PER_TTS_CALL
@@ -79,6 +106,12 @@ async def run_production(job_id: str) -> None:
             date=datetime.datetime.now().isoformat(timespec="seconds"),
             duration_minutes=duration,
             estimated_cost=est_cost,
+            mode=job.get("mode", "topic"),
+            thumbnail_url=f"/media/{job_id}/thumbnail.jpg",
+            script_text=script_text,
+            scenes=scenes,
+            voice=voice_id,
+            video_style=video_style,
         )
 
         await jobs.emit(
@@ -127,6 +160,10 @@ async def produce(req: VideoProduceRequest) -> VideoProduceResponse:
         job["script_text"] = req.script_text
     if req.title is not None:
         job["title"] = req.title
+    if req.voice is not None:
+        job["voice"] = req.voice
+    if req.video_style is not None:
+        job["video_style"] = req.video_style
 
     start_production(req.job_id)
     return VideoProduceResponse(
@@ -205,3 +242,46 @@ async def download(job_id: str) -> FileResponse:
     safe_title = "".join(c for c in job.get("title", "video") if c.isalnum() or c in " -_")
     filename = f"{safe_title.strip() or 'video'}.mp4"
     return FileResponse(video_path, media_type="video/mp4", filename=filename)
+
+
+@router.post("/upload", response_model=VideoUploadResponse)
+async def upload(req: VideoUploadRequest) -> VideoUploadResponse:
+    """Upload a finished interactive video to YouTube as a private draft.
+
+    Generates SEO (description + tags), uploads with the currently-selected
+    thumbnail, and records the YouTube id so the history library can pull live
+    stats. User-initiated (never automatic) for the interactive flow.
+    """
+    job = jobs.get_job(req.job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    video_path = job.get("video_path")
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=409, detail="Video not ready to upload")
+
+    from services import llm_service, youtube_service
+
+    title = job.get("title", "Untitled Video")
+    script_text = job.get("script_text", "")
+    thumbnail_path = job.get("thumbnail_path") or str(
+        config.OUTPUT_DIR / req.job_id / "thumbnail.jpg"
+    )
+    try:
+        seo = await asyncio.to_thread(llm_service.generate_seo, title, script_text)
+        video_id, draft_url = await asyncio.to_thread(
+            youtube_service.upload_to_youtube,
+            video_path,
+            thumbnail_path,
+            title,
+            seo.get("description", ""),
+            seo.get("tags", []),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Interactive upload failed for %s", req.job_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    jobs.update_job(req.job_id, youtube_video_id=video_id)
+    stats.set_youtube_id(req.job_id, video_id)
+    return VideoUploadResponse(
+        job_id=req.job_id, youtube_video_id=video_id, draft_url=draft_url
+    )

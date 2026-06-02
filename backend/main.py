@@ -4,6 +4,8 @@ Run with:  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from core import jobs
 from core.config import config
 from core.logger import get_logger
-from routers import admin, audio, news, script, thumbnail, video
+from routers import admin, audio, history, news, options, script, thumbnail, video
 
 log = get_logger(__name__)
 
@@ -37,6 +39,8 @@ app.include_router(audio.router)
 app.include_router(thumbnail.router)
 app.include_router(admin.router)
 app.include_router(news.router)
+app.include_router(options.router)
+app.include_router(history.router)
 
 # Serve produced media (final video, thumbnail) so the frontend can display it.
 config.ensure_dirs()
@@ -53,11 +57,16 @@ async def _startup() -> None:
     log.info("OUTPUT_DIR=%s TEMP_DIR=%s", config.OUTPUT_DIR, config.TEMP_DIR)
     # Start the breaking-news automation scheduler (news monitor, reply checker,
     # cleanup). Jobs run in the background and never block API requests.
-    try:
-        jobs.start_scheduler()
-        log.info("Scheduled jobs: %s", [j["id"] for j in jobs.jobs_info()])
-    except Exception:  # noqa: BLE001
-        log.exception("Failed to start APScheduler")
+    # DISABLE_SCHEDULER=1 skips it — used by scratch/test instances so they don't
+    # double-run the news automation alongside the live PM2 process.
+    if os.getenv("DISABLE_SCHEDULER", "").strip() in ("1", "true", "True", "yes"):
+        log.warning("DISABLE_SCHEDULER set — APScheduler not started")
+    else:
+        try:
+            jobs.start_scheduler()
+            log.info("Scheduled jobs: %s", [j["id"] for j in jobs.jobs_info()])
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to start APScheduler")
 
 
 @app.on_event("shutdown")

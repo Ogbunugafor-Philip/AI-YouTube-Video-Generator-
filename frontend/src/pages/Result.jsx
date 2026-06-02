@@ -9,6 +9,9 @@ export default function Result() {
   const [job, setJob] = useState(null)
   const [thumbBust, setThumbBust] = useState(0)
   const [regenerating, setRegenerating] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [draftUrl, setDraftUrl] = useState('')
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -34,6 +37,21 @@ export default function Result() {
     }
   }
 
+  async function handleUpload() {
+    setError('')
+    setNotice('')
+    setUploading(true)
+    try {
+      const res = await api.uploadToYoutube(job.job_id)
+      setDraftUrl(res.draft_url)
+      setNotice('Uploaded to YouTube as a private draft. It will appear in History.')
+    } catch (e) {
+      setError(e.message || 'Failed to upload to YouTube.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   function handleNew() {
     store.clear()
     navigate('/')
@@ -47,6 +65,19 @@ export default function Result() {
       <p className="subtitle">Your video is ready.</p>
 
       {error && <div className="error">{error}</div>}
+      {notice && (
+        <div
+          className="error"
+          style={{ background: 'rgba(46,204,113,0.15)', borderColor: '#2ecc71', color: '#d6ffe6' }}
+        >
+          {notice}{' '}
+          {draftUrl && (
+            <a href={draftUrl} target="_blank" rel="noreferrer" style={{ color: '#d6ffe6', fontWeight: 700 }}>
+              Open draft ↗
+            </a>
+          )}
+        </div>
+      )}
 
       <div className="result-grid">
         <VideoPlayer src={api.downloadUrl(job.job_id)} />
@@ -63,6 +94,9 @@ export default function Result() {
           disabled={regenerating}
         >
           {regenerating ? 'Regenerating…' : '↻ Regenerate Thumbnail'}
+        </button>
+        <button className="btn secondary" onClick={handleUpload} disabled={uploading}>
+          {uploading ? 'Uploading…' : '▶ Upload to YouTube'}
         </button>
         <button className="btn ghost" onClick={handleNew}>
           + Start New Video

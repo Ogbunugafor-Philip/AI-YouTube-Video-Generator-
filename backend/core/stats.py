@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.config import config
 from core.logger import get_logger
@@ -70,7 +70,19 @@ def record_api_calls(count: int = 1, cost: float = 0.0) -> None:
 
 
 def record_video(
-    *, job_id: str, title: str, date: str, duration_minutes: int, estimated_cost: float
+    *,
+    job_id: str,
+    title: str,
+    date: str,
+    duration_minutes: int,
+    estimated_cost: float,
+    mode: str = "topic",
+    youtube_video_id: Optional[str] = None,
+    thumbnail_url: Optional[str] = None,
+    script_text: str = "",
+    scenes: Optional[List[Dict[str, Any]]] = None,
+    voice: str = "",
+    video_style: str = "",
 ) -> None:
     with _lock:
         data = _read()
@@ -81,10 +93,35 @@ def record_video(
                 "date": date,
                 "duration_minutes": duration_minutes,
                 "estimated_cost": round(estimated_cost, 4),
+                # --- Phase 3: history-library metadata ---
+                "mode": mode,
+                "youtube_video_id": youtube_video_id,
+                "thumbnail_url": thumbnail_url,
+                "script_text": script_text,
+                "scenes": scenes or [],
+                "voice": voice,
+                "video_style": video_style,
             }
         )
         _write(data)
     log.info("Recorded produced video %s (%s)", job_id, title)
+
+
+def set_youtube_id(job_id: str, youtube_video_id: str) -> bool:
+    """Attach a YouTube video id to the most recent record for ``job_id``."""
+    with _lock:
+        data = _read()
+        for v in reversed(data.get("videos", [])):
+            if v.get("job_id") == job_id:
+                v["youtube_video_id"] = youtube_video_id
+                _write(data)
+                return True
+    return False
+
+
+def get_videos() -> List[Dict[str, Any]]:
+    with _lock:
+        return list(_read().get("videos", []))
 
 
 def record_alert_sent(count: int = 1) -> None:

@@ -15,7 +15,13 @@ from core.logger import get_logger
 log = get_logger(__name__)
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# upload = publishing; youtube + readonly = reading our own videos' statistics
+# for the history library. The refresh token was granted these scopes.
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 
 
 def _require_creds() -> None:
@@ -134,3 +140,50 @@ def upload_to_youtube(
     except HttpError as exc:
         log.exception("YouTube upload failed")
         raise RuntimeError(f"YouTube upload failed: {exc}") from exc
+
+
+def get_video_stats(video_ids: List[str]) -> dict:
+    """Fetch live statistics for up to 50 video ids in one call.
+
+    Returns a dict keyed by video_id -> {views, likes, comments, title,
+    thumbnail, privacy_status, published_at}. Missing/inaccessible ids are
+    simply absent. Never raises — returns {} on failure so the history page
+    still renders.
+    """
+    ids = [v for v in (video_ids or []) if v]
+    if not ids:
+        return {}
+    try:
+        _require_creds()
+        youtube = get_youtube_client()
+        out: dict = {}
+        # The API accepts up to 50 ids per call.
+        for i in range(0, len(ids), 50):
+            chunk = ids[i : i + 50]
+            resp = (
+                youtube.videos()
+                .list(part="statistics,snippet,status", id=",".join(chunk))
+                .execute()
+            )
+            for item in resp.get("items", []):
+                vid = item["id"]
+                st = item.get("statistics", {})
+                sn = item.get("snippet", {})
+                thumbs = sn.get("thumbnails", {})
+                thumb = (
+                    thumbs.get("medium", {}).get("url")
+                    or thumbs.get("default", {}).get("url")
+                )
+                out[vid] = {
+                    "views": int(st.get("viewCount", 0)),
+                    "likes": int(st.get("likeCount", 0)),
+                    "comments": int(st.get("commentCount", 0)),
+                    "title": sn.get("title", ""),
+                    "thumbnail": thumb,
+                    "privacy_status": item.get("status", {}).get("privacyStatus"),
+                    "published_at": sn.get("publishedAt"),
+                }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.error("get_video_stats failed: %s", exc)
+        return {}

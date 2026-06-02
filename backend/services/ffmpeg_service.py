@@ -143,3 +143,57 @@ async def assemble_video(
         raise RuntimeError("ffmpeg completed but output file is missing")
     log.info("Assembled final video: %s", out)
     return str(out)
+
+
+def _escape_subtitle_path(path: str) -> str:
+    """Escape a path for use inside the ffmpeg subtitles filter argument."""
+    # ffmpeg filter parsing needs ':' and '\' escaped, and the whole value is
+    # wrapped so spaces are safe.
+    p = str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    return p
+
+
+async def burn_subtitles(video_path: str, srt_path: str, job_id: str = None) -> str:
+    """Burn ``srt_path`` into ``video_path`` and return the new MP4 path.
+
+    Clean white text with a subtle dark outline, positioned in the bottom third.
+    Falls back to the original video (logged) if burning fails, so a subtitle
+    glitch never blocks delivery of the produced video.
+    """
+    ffmpeg = _ffmpeg_bin()
+    src = Path(video_path)
+    if not src.exists():
+        raise RuntimeError(f"Video for subtitles not found: {video_path}")
+    if not Path(srt_path).exists():
+        log.warning("SRT missing (%s); skipping subtitle burn", srt_path)
+        return str(src)
+
+    out = src.with_name(src.stem + "_subbed.mp4")
+    style = (
+        "FontName=DejaVu Sans,FontSize=18,"
+        "PrimaryColour=&H00FFFFFF,OutlineColour=&H90000000,"
+        "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=45"
+    )
+    vf = f"subtitles='{_escape_subtitle_path(srt_path)}':force_style='{style}'"
+    try:
+        await _run(
+            [
+                ffmpeg, "-y",
+                "-i", str(src),
+                "-vf", vf,
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "copy",
+                str(out),
+            ]
+        )
+    except RuntimeError as exc:
+        log.error("Subtitle burn failed (%s); returning un-subtitled video", exc)
+        return str(src)
+
+    if not out.exists():
+        log.error("Subtitle burn produced no file; returning un-subtitled video")
+        return str(src)
+    # Replace the original final video with the subtitled one.
+    out.replace(src)
+    log.info("Burned subtitles into %s", src)
+    return str(src)

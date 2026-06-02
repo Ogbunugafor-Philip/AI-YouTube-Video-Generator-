@@ -40,9 +40,14 @@ def create_job(
         "job_id": job_id,
         "title": title,
         "script_text": script_text,
+        # Original AI-generated script, preserved so the editor can show a diff.
+        "original_script_text": script_text,
         "scenes": scenes or [],
         "duration_minutes": duration_minutes,
         "mode": mode,
+        # --- Phase 3: quality & control choices ---
+        "voice": "",          # selected fal TTS voice (blank => default)
+        "video_style": "",    # cinematic | minimalist | corporate | vibrant | ""
         "status": "created",          # created | approved | processing | complete | error
         "step": "",
         "percentage": 0,
@@ -50,6 +55,8 @@ def create_job(
         "scenes_completed": 0,
         "video_path": None,
         "thumbnail_path": None,
+        "subtitle_path": None,
+        "youtube_video_id": None,
         "error": None,
     }
     _QUEUES[job_id] = asyncio.Queue()
@@ -113,6 +120,7 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
         youtube_service,
         gmail_service,
         push_service,
+        subtitle_service,
     )
     from core import stats
     from core.config import config
@@ -137,6 +145,13 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
     narration = await fal_service.generate_voice(script, job_id=job_id)
     clips = await fal_service.generate_all_clips(scenes, job_id=job_id)
     video_path = await ffmpeg_service.assemble_video(clips, narration, job_id=job_id)
+    # Subtitles: burn captions synced to the narration (non-fatal on failure).
+    try:
+        audio_dur = await ffmpeg_service._probe_duration(narration)
+        srt_path = subtitle_service.generate_srt(script, audio_dur or 0, job_id)
+        video_path = await ffmpeg_service.burn_subtitles(video_path, srt_path, job_id)
+    except Exception as sub_exc:  # noqa: BLE001
+        log.error("News subtitle step failed (non-fatal): %s", sub_exc)
     thumbnail_path = await fal_service.generate_thumbnail(
         gen_title, script, job_id=job_id
     )
@@ -177,6 +192,10 @@ async def produce_news_video(story: Dict[str, Any]) -> Dict[str, Any]:
             + stats.COST_PER_SCRIPT_CALL * 4,
             4,
         ),
+        mode="news",
+        youtube_video_id=video_id,
+        script_text=script,
+        scenes=scenes,
     )
 
     # 11: the upload succeeded — delete this job's produced files from the VPS.

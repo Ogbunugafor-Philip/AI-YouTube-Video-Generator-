@@ -12,9 +12,10 @@ from models.schemas import (
     ScriptGenerateResponse,
 )
 from services import llm_service
-from routers.video import start_production
 
 log = get_logger(__name__)
+
+WORDS_PER_MINUTE = 150
 
 router = APIRouter(prefix="/api/script", tags=["script"])
 
@@ -68,12 +69,47 @@ async def generate(req: ScriptGenerateRequest) -> ScriptGenerateResponse:
 
 @router.post("/approve", response_model=ScriptApproveResponse)
 async def approve(req: ScriptApproveRequest) -> ScriptApproveResponse:
-    """Approve a generated script and trigger the full production pipeline."""
+    """Approve a script (optionally edited) and move into pre-production.
+
+    If the user edited the script, scenes are re-split from the new text and the
+    estimated duration is recalculated. Production is NOT started here anymore —
+    the style / voice / scene-editor screens come next, then /api/video/produce.
+    """
     job = jobs.get_job(req.job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown job_id")
-    jobs.update_job(req.job_id, status="approved")
-    started = start_production(req.job_id)
-    status = "processing" if started else job.get("status", "processing")
-    log.info("Job %s approved; production started=%s", req.job_id, started)
-    return ScriptApproveResponse(job_id=req.job_id, status=status)
+
+    script_text = job.get("script_text", "")
+    scenes = job.get("scenes", [])
+    resplit = False
+
+    if (
+        req.script_text is not None
+        and req.script_text.strip()
+        and req.script_text != script_text
+    ):
+        script_text = req.script_text
+        try:
+            scenes = llm_service.split_into_scenes(script_text)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        resplit = True
+
+    duration_minutes = max(1, round(len(script_text.split()) / WORDS_PER_MINUTE))
+    jobs.update_job(
+        req.job_id,
+        status="approved",
+        script_text=script_text,
+        scenes=scenes,
+        scenes_total=len(scenes),
+        duration_minutes=duration_minutes,
+    )
+    log.info("Job %s approved (resplit=%s, %d scenes)", req.job_id, resplit, len(scenes))
+    return ScriptApproveResponse(
+        job_id=req.job_id,
+        status="approved",
+        script_text=script_text,
+        duration_minutes=duration_minutes,
+        scenes=scenes,
+        resplit=resplit,
+    )

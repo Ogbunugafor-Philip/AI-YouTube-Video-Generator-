@@ -171,20 +171,47 @@ async def generate_all_clips(
 # --------------------------------------------------------------------------- #
 # Voice narration
 # --------------------------------------------------------------------------- #
-async def generate_voice(script_text: str, job_id: Optional[str] = None) -> str:
-    """Generate professional narration audio and save it to TEMP_DIR/narration.mp3."""
+DEFAULT_TTS_VOICE = "af_heart"
+
+
+def _tts_args(text: str, voice: str) -> Dict[str, Any]:
+    """Build TTS request args. fal-ai/kokoro takes ``prompt`` + ``voice``."""
+    return {"prompt": text, "voice": voice}
+
+
+async def generate_voice(
+    script_text: str, job_id: Optional[str] = None, voice: Optional[str] = None
+) -> str:
+    """Generate professional narration audio and save it to TEMP_DIR/narration.wav.
+
+    ``voice`` is the TTS voice code (kokoro); falls back to the default.
+    """
     base = config.job_temp_dir(job_id) if job_id else config.TEMP_DIR
-    dest = base / "narration.mp3"
-    log.info("Generating narration audio (%d chars)", len(script_text))
+    dest = base / "narration.wav"
+    voice_name = voice or DEFAULT_TTS_VOICE
+    log.info("Generating narration audio (%d chars) voice=%r", len(script_text), voice_name)
     if not script_text.strip():
         raise RuntimeError("Cannot generate voice from empty script")
-    result = await _fal_run(
-        config.FAL_TTS_MODEL,
-        {
-            "input": script_text,
-            "voice": "Jennifer (English (US)/American)",
-        },
-    )
+    result = await _fal_run(config.FAL_TTS_MODEL, _tts_args(script_text, voice_name))
+    stats.record_api_calls(0, stats.COST_PER_TTS_CALL)
+    audio_url = _first_url(result, "audio", "audio_url", "audio_file")
+    if not audio_url:
+        raise RuntimeError("No audio URL returned from TTS model")
+    await _download(audio_url, dest)
+    return str(dest)
+
+
+async def generate_voice_preview(voice_id: str, voice: str, text: str) -> str:
+    """Generate (and cache) a short preview clip for a catalog voice.
+
+    Saved to OUTPUT_DIR/voice_previews/<voice_id>.wav so it's only generated
+    once per voice.
+    """
+    dest = config.OUTPUT_DIR / "voice_previews" / f"{voice_id}.wav"
+    if dest.exists() and dest.stat().st_size > 0:
+        return str(dest)
+    log.info("Generating voice preview for %s (%r)", voice_id, voice)
+    result = await _fal_run(config.FAL_TTS_MODEL, _tts_args(text, voice))
     stats.record_api_calls(0, stats.COST_PER_TTS_CALL)
     audio_url = _first_url(result, "audio", "audio_url", "audio_file")
     if not audio_url:

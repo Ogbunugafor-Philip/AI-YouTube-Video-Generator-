@@ -20,10 +20,34 @@ async function postJSON(path, body) {
   return res.json()
 }
 
+async function getJSON(path) {
+  const res = await fetch(path)
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      detail = (await res.json()).detail || detail
+    } catch (e) {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}
+
 export const api = {
   generateScript: (payload) => postJSON('/api/script/generate', payload),
-  approveScript: (jobId) => postJSON('/api/script/approve', { job_id: jobId }),
+  // Approve, optionally with an edited script (re-splits scenes when changed).
+  approveScript: (jobId, scriptText) =>
+    postJSON('/api/script/approve', { job_id: jobId, script_text: scriptText ?? null }),
   produce: (payload) => postJSON('/api/video/produce', payload),
+  // Pre-production options.
+  getVoiceOptions: () => getJSON('/api/voice/options'),
+  voicePreviewUrl: (voiceId) => `/api/voice/preview/${voiceId}`,
+  getStyleOptions: () => getJSON('/api/style/options'),
+  // History library.
+  getHistory: () => getJSON('/api/history'),
+  getHistoryDetail: (jobId) => getJSON(`/api/history/${jobId}`),
+  uploadToYoutube: (jobId) => postJSON('/api/video/upload', { job_id: jobId }),
   regenerateThumbnail: (jobId, title) =>
     postJSON('/api/thumbnail/regenerate', { job_id: jobId, title }),
   getStats: async () => {
