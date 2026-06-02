@@ -15,12 +15,15 @@ from core.logger import get_logger
 log = get_logger(__name__)
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
-# upload = publishing; youtube + readonly = reading our own videos' statistics
-# for the history library. The refresh token was granted these scopes.
+# upload = publishing; youtube + readonly = reading our own videos' statistics;
+# yt-analytics.readonly = watch-time / retention via the YouTube Analytics API.
+# NOTE: a refresh token only carries the scopes granted at consent time. If the
+# token predates yt-analytics.readonly, re-run get_youtube_token.py to re-auth.
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 
@@ -38,25 +41,42 @@ def _require_creds() -> None:
         raise RuntimeError(f"YouTube credentials missing in .env: {', '.join(missing)}")
 
 
-def get_youtube_client() -> Any:
-    """Build an authenticated YouTube Data API client from the refresh token.
+def _credentials() -> Any:
+    """Build OAuth credentials from the refresh token (auto-refreshing).
 
-    google-auth refreshes the access token automatically when it expires.
+    We deliberately do NOT pin ``scopes`` here: on a refresh_token grant Google
+    returns a token carrying exactly the scopes granted at consent time. Pinning
+    a scope the token lacks makes the *refresh itself* fail with invalid_scope
+    (breaking upload + stats too). Instead each API call simply succeeds or 403s
+    based on what was actually granted, and callers handle the 403 gracefully.
+    SCOPES above documents what get_youtube_token.py should request.
     """
     _require_creds()
-    # Imported lazily so the module imports even if these heavy deps are absent.
     from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
 
-    creds = Credentials(
+    return Credentials(
         token=None,
         refresh_token=config.YOUTUBE_REFRESH_TOKEN,
         client_id=config.YOUTUBE_CLIENT_ID,
         client_secret=config.YOUTUBE_CLIENT_SECRET,
         token_uri=TOKEN_URI,
-        scopes=SCOPES,
     )
-    return build("youtube", "v3", credentials=creds, cache_discovery=False)
+
+
+def get_youtube_client() -> Any:
+    """Build an authenticated YouTube Data API v3 client."""
+    from googleapiclient.discovery import build
+
+    return build("youtube", "v3", credentials=_credentials(), cache_discovery=False)
+
+
+def get_analytics_client() -> Any:
+    """Build an authenticated YouTube Analytics API v2 client."""
+    from googleapiclient.discovery import build
+
+    return build(
+        "youtubeAnalytics", "v2", credentials=_credentials(), cache_discovery=False
+    )
 
 
 def upload_to_youtube(
@@ -186,4 +206,60 @@ def get_video_stats(video_ids: List[str]) -> dict:
         return out
     except Exception as exc:  # noqa: BLE001
         log.error("get_video_stats failed: %s", exc)
+        return {}
+
+
+def get_analytics(video_ids: List[str]) -> dict:
+    """Fetch watch-time / retention for our own videos via the Analytics API.
+
+    Returns {video_id: {watch_time_minutes, avg_view_duration_sec,
+    avg_view_percentage}}. Requires the yt-analytics.readonly scope on the
+    refresh token; if it's missing the call 403s and we return {} (logged once),
+    so the history page still renders with Data-API stats only.
+    """
+    import datetime
+
+    ids = [v for v in (video_ids or []) if v]
+    if not ids:
+        return {}
+    try:
+        client = get_analytics_client()
+        today = datetime.date.today().isoformat()
+        out: dict = {}
+        # filters caps at ~500 ids; chunk to be safe.
+        for i in range(0, len(ids), 200):
+            chunk = ids[i : i + 200]
+            resp = (
+                client.reports()
+                .query(
+                    ids="channel==MINE",
+                    startDate="2005-01-01",
+                    endDate=today,
+                    metrics="estimatedMinutesWatched,averageViewDuration,averageViewPercentage",
+                    dimensions="video",
+                    filters="video==" + ",".join(chunk),
+                    maxResults=200,
+                )
+                .execute()
+            )
+            headers = [h["name"] for h in resp.get("columnHeaders", [])]
+            for row in resp.get("rows", []):
+                rec = dict(zip(headers, row))
+                vid = rec.get("video")
+                if not vid:
+                    continue
+                out[vid] = {
+                    "watch_time_minutes": int(rec.get("estimatedMinutesWatched", 0) or 0),
+                    "avg_view_duration_sec": int(rec.get("averageViewDuration", 0) or 0),
+                    "avg_view_percentage": round(
+                        float(rec.get("averageViewPercentage", 0) or 0), 1
+                    ),
+                }
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "get_analytics unavailable (re-auth with yt-analytics.readonly may be "
+            "needed): %s",
+            exc,
+        )
         return {}

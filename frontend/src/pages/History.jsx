@@ -11,6 +11,13 @@ const fmtDate = (ts) => {
   }
 }
 const fmtNum = (n) => (n == null ? '—' : Number(n).toLocaleString())
+const fmtMins = (m) => (m == null ? '—' : `${Number(m).toLocaleString()} min`)
+const fmtSecs = (s) => {
+  if (s == null) return '—'
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return m > 0 ? `${m}m ${r}s` : `${r}s`
+}
 
 export default function History() {
   const [videos, setVideos] = useState([])
@@ -157,6 +164,34 @@ export default function History() {
                     <div className="lbl">Comments</div>
                   </div>
                 </div>
+
+                {/* Watch-time & retention (YouTube Analytics API) */}
+                <div className="stat-cards" style={{ marginTop: 0 }}>
+                  <div className="card stat-card">
+                    <div className="num" style={{ fontSize: '1.7rem' }}>
+                      {fmtMins(detail.watch_time_minutes)}
+                    </div>
+                    <div className="lbl">Watch Time</div>
+                  </div>
+                  <div className="card stat-card">
+                    <div className="num" style={{ fontSize: '1.7rem' }}>
+                      {fmtSecs(detail.avg_view_duration_sec)}
+                    </div>
+                    <div className="lbl">Avg View Duration</div>
+                  </div>
+                  <div className="card stat-card">
+                    <div className="num" style={{ fontSize: '1.7rem' }}>
+                      {detail.avg_view_percentage == null ? '—' : `${detail.avg_view_percentage}%`}
+                    </div>
+                    <div className="lbl">Avg Retention</div>
+                  </div>
+                </div>
+                {detail.youtube_video_id && detail.watch_time_minutes == null && (
+                  <p className="muted" style={{ fontSize: '0.82rem', marginTop: 4 }}>
+                    Watch-time needs the YouTube Analytics scope — re-run the token
+                    setup to enable it.
+                  </p>
+                )}
 
                 {detail.youtube_url && (
                   <p style={{ marginTop: 8 }}>
